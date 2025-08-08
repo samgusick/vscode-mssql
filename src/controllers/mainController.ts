@@ -1,3 +1,4 @@
+// ...existing code...
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
@@ -98,7 +99,8 @@ export default class MainController implements vscode.Disposable {
     private _context: vscode.ExtensionContext;
     private _event: events.EventEmitter = new events.EventEmitter();
     private _outputContentProvider: SqlOutputContentProvider;
-    private _queryResultWebviewController: QueryResultWebviewController;
+    // Map from document URI to QueryResultWebviewController
+    private _queryResultWebviewControllers: Map<string, QueryResultWebviewController> = new Map();
     private _statusview: StatusView;
     private _connectionMgr: ConnectionManager;
     private _prompter: IPrompter;
@@ -148,6 +150,30 @@ export default class MainController implements vscode.Disposable {
         this._untitledSqlDocumentService = new UntitledSqlDocumentService(this._vscodeWrapper);
         this.configuration = vscode.workspace.getConfiguration();
         UserSurvey.createInstance(this._context, this._vscodeWrapper);
+        // Initialize the map for per-document webview controllers
+        this._queryResultWebviewControllers = new Map();
+    }
+
+    /**
+     * Gets or creates a QueryResultWebviewController for the given document URI
+     */
+    private getOrCreateQueryResultWebviewController(
+        documentUri: string,
+    ): QueryResultWebviewController {
+        let controller = this._queryResultWebviewControllers.get(documentUri);
+        if (!controller) {
+            controller = new QueryResultWebviewController(
+                this._context,
+                this._vscodeWrapper,
+                this.executionPlanService,
+                this.untitledSqlDocumentService,
+            );
+            // Register the SqlOutputContentProvider for this document URI
+            controller.setSqlOutputContentProvider(documentUri, this._outputContentProvider);
+            this._queryResultWebviewControllers.set(documentUri, controller);
+            // Optionally: set up disposal when the document is closed (handled in later steps)
+        }
+        return controller;
     }
 
     /**
@@ -529,10 +555,8 @@ export default class MainController implements vscode.Disposable {
             this.executionPlanService = new ExecutionPlanService(SqlToolsServerClient.instance);
             this.copilotService = new CopilotService(SqlToolsServerClient.instance);
 
-            this._queryResultWebviewController.setExecutionPlanService(this.executionPlanService);
-            this._queryResultWebviewController.setUntitledDocumentService(
-                this._untitledSqlDocumentService,
-            );
+            // No longer set execution plan or untitled doc service on a single controller here.
+            // This will be handled per webview controller instance as needed.
 
             this.schemaDesignerService = new SchemaDesignerService(SqlToolsServerClient.instance);
 
@@ -876,23 +900,15 @@ export default class MainController implements vscode.Disposable {
         // Init CodeAdapter for use when user response to questions is needed
         this._prompter = new CodeAdapter(this._vscodeWrapper);
 
-        // Init Query Results Webview Controller
-        this._queryResultWebviewController = new QueryResultWebviewController(
-            this._context,
-            this._vscodeWrapper,
-            this.executionPlanService,
-            this.untitledSqlDocumentService,
-        );
+        // No longer create a single QueryResultWebviewController here.
+        // The per-document controllers will be created as needed.
 
         // Init content provider for results pane
         this._outputContentProvider = new SqlOutputContentProvider(
             this._statusview,
             this._vscodeWrapper,
         );
-        this._outputContentProvider.setQueryResultWebviewController(
-            this._queryResultWebviewController,
-        );
-        this._queryResultWebviewController.setSqlOutputContentProvider(this._outputContentProvider);
+        // The output content provider will be updated to use per-document webview controllers.
 
         // Init connection manager and connection MRU
         this._connectionMgr = new ConnectionManager(
@@ -1398,12 +1414,7 @@ export default class MainController implements vscode.Disposable {
                 ),
             );
 
-            this._context.subscriptions.push(
-                vscode.window.registerWebviewViewProvider(
-                    "queryResult",
-                    this._queryResultWebviewController,
-                ),
-            );
+            // No longer register a single webview view provider here. Each document's controller manages its own webview.
         }
 
         // Initiate the scripting service
@@ -1615,7 +1626,8 @@ export default class MainController implements vscode.Disposable {
         this._context.subscriptions.push(
             vscode.commands.registerCommand(Constants.cmdCopyAll, async (context) => {
                 const uri = context.uri;
-                await this._queryResultWebviewController.copyAllMessagesToClipboard(uri);
+                const controller = this.getOrCreateQueryResultWebviewController(uri);
+                await controller.copyAllMessagesToClipboard(uri);
             }),
         );
     }
@@ -2001,9 +2013,10 @@ export default class MainController implements vscode.Disposable {
             let editor = self._vscodeWrapper.activeTextEditor;
             let uri = self._vscodeWrapper.activeTextEditorUri;
 
-            if (self._queryResultWebviewController) {
+            const controller = self.getOrCreateQueryResultWebviewController(uri);
+            if (controller && controller.actualPlanStatuses) {
                 self._executionPlanOptions.includeActualExecutionPlanXml =
-                    self._queryResultWebviewController.actualPlanStatuses.includes(uri);
+                    controller.actualPlanStatuses.includes(uri);
             } else {
                 self._executionPlanOptions.includeActualExecutionPlanXml = false;
             }
@@ -2090,25 +2103,18 @@ export default class MainController implements vscode.Disposable {
 
     public onToggleActualPlan(isEnable: boolean): void {
         const uri = this._vscodeWrapper.activeTextEditorUri;
-        let actualPlanStatuses = this._queryResultWebviewController.actualPlanStatuses;
-
-        // adds the current uri to the list of uris with actual plan enabled
-        // or removes the uri if the user is disabling it
+        const controller = this.getOrCreateQueryResultWebviewController(uri);
+        let actualPlanStatuses = controller.actualPlanStatuses || [];
         if (isEnable && !actualPlanStatuses.includes(uri)) {
             actualPlanStatuses.push(uri);
         } else {
-            this._queryResultWebviewController.actualPlanStatuses = actualPlanStatuses.filter(
-                (statusUri) => statusUri != uri,
-            );
+            actualPlanStatuses = actualPlanStatuses.filter((statusUri) => statusUri != uri);
         }
-
-        // sets the vscode context variable associated with the
-        // actual plan statuses; this is used in the package.json to
-        // know when to change the enabling/disabling icon
+        controller.actualPlanStatuses = actualPlanStatuses;
         void vscode.commands.executeCommand(
             "setContext",
             "mssql.executionPlan.urisWithActualPlanEnabled",
-            this._queryResultWebviewController.actualPlanStatuses,
+            actualPlanStatuses,
         );
     }
 
@@ -2459,7 +2465,11 @@ export default class MainController implements vscode.Disposable {
             // Avoid processing events before initialization is complete
             return;
         }
+        // Only handle .sql files or untitled documents
         let closedDocumentUri: string = doc.uri.toString(true);
+        if (!closedDocumentUri.endsWith(".sql") && !closedDocumentUri.startsWith("untitled:")) {
+            return;
+        }
         let closedDocumentUriScheme: string = doc.uri.scheme;
 
         // Stop timers if they have been started
@@ -2497,14 +2507,18 @@ export default class MainController implements vscode.Disposable {
 
         // clean up: if a document is closed with actual plan enabled, remove it
         // from our status list
-        if (this._queryResultWebviewController.actualPlanStatuses.includes(closedDocumentUri)) {
-            this._queryResultWebviewController.actualPlanStatuses.filter(
-                (uri) => uri != closedDocumentUri,
+        const controller = this.getOrCreateQueryResultWebviewController(closedDocumentUri);
+        if (
+            controller.actualPlanStatuses &&
+            controller.actualPlanStatuses.includes(closedDocumentUri)
+        ) {
+            controller.actualPlanStatuses = controller.actualPlanStatuses.filter(
+                (uri) => uri !== closedDocumentUri,
             );
             vscode.commands.executeCommand(
                 "setContext",
                 "mssql.executionPlan.urisWithActualPlanEnabled",
-                this._queryResultWebviewController.actualPlanStatuses,
+                controller.actualPlanStatuses,
             );
         }
 
@@ -2534,18 +2548,22 @@ export default class MainController implements vscode.Disposable {
         // Update the URI in the output content provider query result map
         this._outputContentProvider.onUntitledFileSaved(oldUri, newUri);
 
-        let state = this._queryResultWebviewController.getQueryResultState(oldUri);
-        if (state) {
-            state.uri = newUri;
-
-            await this._queryResultWebviewController.sendNotification(
-                StateChangeNotification.type<QueryResultWebviewState>(),
-                state,
-            );
-
-            //Update the URI in the query result webview state
-            this._queryResultWebviewController.setQueryResultState(newUri, state);
-            this._queryResultWebviewController.deleteQueryResultState(oldUri);
+        // Only handle .sql files or untitled documents
+        if (!oldUri.endsWith(".sql") && !oldUri.startsWith("untitled:")) {
+            return;
+        }
+        const controller = this.getOrCreateQueryResultWebviewController(oldUri);
+        if (controller) {
+            let state = controller.getQueryResultState(oldUri);
+            if (state) {
+                state.uri = newUri;
+                await controller.sendNotification(
+                    StateChangeNotification.type<QueryResultWebviewState>(),
+                    state,
+                );
+                controller.setQueryResultState(newUri, state);
+                controller.deleteQueryResultState(oldUri);
+            }
         }
     }
 
@@ -2556,6 +2574,11 @@ export default class MainController implements vscode.Disposable {
     public onDidOpenTextDocument(doc: vscode.TextDocument): void {
         if (this._connectionMgr === undefined) {
             // Avoid processing events before initialization is complete
+            return;
+        }
+        // Only handle .sql files or untitled documents
+        const openedDocumentUri: string = doc.uri.toString(true);
+        if (!openedDocumentUri.endsWith(".sql") && !openedDocumentUri.startsWith("untitled:")) {
             return;
         }
         this._connectionMgr.onDidOpenTextDocument(doc);
@@ -2612,9 +2635,13 @@ export default class MainController implements vscode.Disposable {
             // Avoid processing events before initialization is complete
             return;
         }
+        // Only handle .sql files or untitled documents
+        let savedDocumentUri: string = doc.uri.toString(true);
+        if (!savedDocumentUri.endsWith(".sql") && !savedDocumentUri.startsWith("untitled:")) {
+            return;
+        }
 
         // Set encoding to false by giving true as argument
-        let savedDocumentUri: string = doc.uri.toString(true);
 
         // Keep track of which file was last saved and when for detecting the case when we save an untitled document to disk
         this._lastSavedTimer = new Utils.Timer();

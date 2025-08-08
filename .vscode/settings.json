@@ -41,5 +41,15 @@
     },
     "[css]": {
         "editor.defaultFormatter": "esbenp.prettier-vscode"
-    }
+    },
+    "connectionGroups": [
+        {
+            "id": "00000000-0000-0000-0000-000000000000",
+            "name": "ROOT",
+            "parentId": "",
+            "color": null,
+            "description": null
+        }
+    ],
+    "connections": []
 }

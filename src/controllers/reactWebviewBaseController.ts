@@ -465,6 +465,10 @@ export abstract class ReactWebviewBaseController<State, Reducers> implements vsc
      * @param state The new state object.  If not provided, `this.state` is used.
      */
     public updateState(state?: State) {
+        console.log(
+            `[ReactWebviewBaseController] updateState called. State:`,
+            JSON.stringify(state ?? this.state, null, 2),
+        );
         this.state = state ?? this.state;
     }
 

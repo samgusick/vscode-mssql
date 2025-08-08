@@ -67,8 +67,8 @@ export function registerCommonRequestHandlers(
 
     webviewController.onRequest(qr.GetRowsRequest.type, async (message) => {
         const result = await webviewViewController
-            .getSqlOutputContentProvider()
-            .rowRequestHandler(
+            .getSqlOutputContentProvider(message.uri)
+            ?.rowRequestHandler(
                 message.uri,
                 message.batchId,
                 message.resultId,
@@ -115,8 +115,8 @@ export function registerCommonRequestHandlers(
         }
 
         return await webviewViewController
-            .getSqlOutputContentProvider()
-            .editorSelectionRequestHandler(message.uri, message.selectionData);
+            .getSqlOutputContentProvider(message.uri)
+            ?.editorSelectionRequestHandler(message.uri, message.selectionData);
     });
 
     webviewController.onRequest(qr.SaveResultsWebviewRequest.type, async (message) => {
@@ -127,8 +127,8 @@ export function registerCommonRequestHandlers(
             origin: message.origin,
         });
         return await webviewViewController
-            .getSqlOutputContentProvider()
-            .saveResultsRequestHandler(
+            .getSqlOutputContentProvider(message.uri)
+            ?.saveResultsRequestHandler(
                 message.uri,
                 message.batchId,
                 message.resultId,
@@ -142,8 +142,8 @@ export function registerCommonRequestHandlers(
             correlationId: correlationId,
         });
         return webviewViewController
-            .getSqlOutputContentProvider()
-            .sendToClipboard(
+            .getSqlOutputContentProvider(message.uri)
+            ?.sendToClipboard(
                 message.uri,
                 message.data,
                 message.batchId,
@@ -158,8 +158,8 @@ export function registerCommonRequestHandlers(
             correlationId: correlationId,
         });
         return await webviewViewController
-            .getSqlOutputContentProvider()
-            .copyRequestHandler(
+            .getSqlOutputContentProvider(message.uri)
+            ?.copyRequestHandler(
                 message.uri,
                 message.batchId,
                 message.resultId,
@@ -175,13 +175,15 @@ export function registerCommonRequestHandlers(
             selection: undefined,
             origin: undefined,
         });
-        return await webviewViewController.getSqlOutputContentProvider().copyRequestHandler(
-            message.uri,
-            message.batchId,
-            message.resultId,
-            message.selection,
-            true, //copy headers flag
-        );
+        return await webviewViewController
+            .getSqlOutputContentProvider(message.uri)
+            ?.copyRequestHandler(
+                message.uri,
+                message.batchId,
+                message.resultId,
+                message.selection,
+                true, //copy headers flag
+            );
     });
 
     webviewController.onRequest(qr.CopyHeadersRequest.type, async (message) => {
@@ -189,8 +191,8 @@ export function registerCommonRequestHandlers(
             correlationId: correlationId,
         });
         return await webviewViewController
-            .getSqlOutputContentProvider()
-            .copyHeadersRequestHandler(
+            .getSqlOutputContentProvider(message.uri)
+            ?.copyHeadersRequestHandler(
                 message.uri,
                 message.batchId,
                 message.resultId,
@@ -204,8 +206,8 @@ export function registerCommonRequestHandlers(
             format: "csv",
         });
         return await webviewViewController
-            .getSqlOutputContentProvider()
-            .copyAsCsvRequestHandler(
+            .getSqlOutputContentProvider(message.uri)
+            ?.copyAsCsvRequestHandler(
                 message.uri,
                 message.batchId,
                 message.resultId,
@@ -220,8 +222,8 @@ export function registerCommonRequestHandlers(
             format: "json",
         });
         return await webviewViewController
-            .getSqlOutputContentProvider()
-            .copyAsJsonRequestHandler(
+            .getSqlOutputContentProvider(message.uri)
+            ?.copyAsJsonRequestHandler(
                 message.uri,
                 message.batchId,
                 message.resultId,
@@ -310,7 +312,17 @@ export function registerCommonRequestHandlers(
                 ? webviewController.getQueryResultWebviewViewController()
                 : webviewController;
 
-        controller.updateSelectionSummaryStatusItem(message.summary);
+        // Format SelectionSummaryStats as a string
+        const stats = message.summary;
+        const summaryString =
+            `Count: ${stats.count}` +
+            (stats.sum !== undefined ? `, Sum: ${stats.sum}` : "") +
+            (stats.average !== undefined ? `, Avg: ${stats.average}` : "") +
+            (stats.min !== undefined ? `, Min: ${stats.min}` : "") +
+            (stats.max !== undefined ? `, Max: ${stats.max}` : "") +
+            (stats.distinctCount !== undefined ? `, Distinct: ${stats.distinctCount}` : "") +
+            (stats.nullCount !== undefined ? `, Nulls: ${stats.nullCount}` : "");
+        controller.updateSelectionSummaryStatusItem(summaryString);
     });
 
     webviewController.registerReducer("setResultTab", async (state, payload) => {
@@ -326,11 +338,10 @@ export function registerCommonRequestHandlers(
         // Ensure execution plan state exists and execution plan graphs have not loaded
         if (
             currentResultState.executionPlanState &&
+            Array.isArray(currentResultState.executionPlanState.executionPlanGraphs) &&
             currentResultState.executionPlanState.executionPlanGraphs.length === 0 &&
-            // Check for non-empty XML plans and result summaries
             recordLength(currentResultState.executionPlanState.xmlPlans) &&
             recordLength(currentResultState.resultSetSummaries) &&
-            // Verify XML plans match expected number of result sets
             recordLength(currentResultState.executionPlanState.xmlPlans) ===
                 webviewViewController.getNumExecutionPlanResultSets(
                     currentResultState.resultSetSummaries,
@@ -346,7 +357,6 @@ export function registerCommonRequestHandlers(
             state.executionPlanState.loadState = ApiStatus.Loaded;
             state.tabStates.resultPaneTab = qr.QueryResultPaneTabs.ExecutionPlan;
         }
-
         return state;
     });
     webviewController.registerReducer("openFileThroughLink", async (state, payload) => {
@@ -386,12 +396,12 @@ export function registerCommonRequestHandlers(
     });
 }
 
-export function recordLength(record: any): number {
-    return Object.keys(record).length;
+export function recordLength(record: Record<string, unknown> | undefined): number {
+    return record ? Object.keys(record).length : 0;
 }
 
 export function messageToString(message: qr.IMessage): string {
-    if (message.link?.text) {
+    if (message.link && message.link.text) {
         return `${message.message}${message.link.text}`;
     }
     return message.message;

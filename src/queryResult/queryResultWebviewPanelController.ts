@@ -1,3 +1,4 @@
+import { ApiStatus } from "../sharedInterfaces/webview";
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
@@ -36,7 +37,7 @@ export class QueryResultWebviewPanelController extends ReactWebviewPanelControll
                 tabStates: {
                     resultPaneTab: qr.QueryResultPaneTabs.Messages,
                 },
-                executionPlanState: {},
+                executionPlanState: { loadState: ApiStatus.NotStarted },
                 fontSettings: {},
             },
             {

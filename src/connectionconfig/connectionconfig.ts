@@ -527,19 +527,19 @@ export class ConnectionConfig implements IConnectionConfig {
             | ConfigurationTarget.Global
             | ConfigurationTarget.Workspace = ConfigurationTarget.Global,
     ): T[] {
+        // Always use the 'mssql' config section
         let configuration = this._vscodeWrapper.getConfiguration(
-            Constants.extensionName,
+            "mssql",
             this._vscodeWrapper.activeTextEditorUri,
         );
-
         let configValue = configuration.inspect<T[]>(configSection);
         if (location === ConfigurationTarget.Global) {
             // only return the global values if that's what's requested
-            return configValue.globalValue || [];
+            return configValue?.globalValue || [];
         } else {
             // otherwise, return the combination of the workspace and workspace folder values
-            return (configValue.workspaceValue || []).concat(
-                configValue.workspaceFolderValue || [],
+            return (configValue?.workspaceValue || []).concat(
+                configValue?.workspaceFolderValue || [],
             );
         }
     }

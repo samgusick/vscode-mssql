@@ -17,13 +17,7 @@ import UntitledSqlDocumentService from "../controllers/untitledSqlDocumentServic
 import { ExecutionPlanService } from "../services/executionPlanService";
 import VscodeWrapper from "../controllers/vscodeWrapper";
 import { QueryResultWebviewPanelController } from "./queryResultWebviewPanelController";
-import {
-    getNewResultPaneViewColumn,
-    messageToString,
-    recordLength,
-    registerCommonRequestHandlers,
-} from "./utils";
-import { QueryResult } from "../constants/locConstants";
+import { getNewResultPaneViewColumn, registerCommonRequestHandlers } from "./utils";
 
 export class QueryResultWebviewController extends ReactWebviewViewController<
     qr.QueryResultWebviewState,
@@ -35,11 +29,87 @@ export class QueryResultWebviewController extends ReactWebviewViewController<
     >();
     private _queryResultWebviewPanelControllerMap: Map<string, QueryResultWebviewPanelController> =
         new Map<string, QueryResultWebviewPanelController>();
-    private _sqlOutputContentProvider: SqlOutputContentProvider;
+    private _sqlOutputContentProviderMap: Map<string, SqlOutputContentProvider> = new Map<
+        string,
+        SqlOutputContentProvider
+    >();
     private _correlationId: string = randomUUID();
     private _selectionSummaryStatusBarItem: vscode.StatusBarItem =
         vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 2);
     public actualPlanStatuses: string[] = [];
+
+    // Restore old API for compatibility
+    public setSqlOutputContentProvider(uri: string, provider: SqlOutputContentProvider): void {
+        this._sqlOutputContentProviderMap.set(uri, provider);
+    }
+
+    public getSqlOutputContentProvider(uri: string): SqlOutputContentProvider | undefined {
+        return this._sqlOutputContentProviderMap.get(uri);
+    }
+
+    public hasPanel(uri: string): boolean {
+        return this._queryResultWebviewPanelControllerMap.has(uri);
+    }
+
+    public addResultSetSummary(uri: string, resultSet: any): void {
+        const state = this._queryResultStateMap.get(uri);
+        if (state) {
+            if (!state.resultSetSummaries) {
+                state.resultSetSummaries = {};
+            }
+            if (!state.resultSetSummaries[resultSet.batchId]) {
+                state.resultSetSummaries[resultSet.batchId] = {};
+            }
+            state.resultSetSummaries[resultSet.batchId][resultSet.id] = resultSet;
+            this._queryResultStateMap.set(uri, state);
+        }
+    }
+
+    public removePanel(uri: string): void {
+        this._queryResultWebviewPanelControllerMap.delete(uri);
+    }
+
+    public updateSelectionSummaryStatusItem(summary: string): void {
+        this._selectionSummaryStatusBarItem.text = summary;
+        this._selectionSummaryStatusBarItem.show();
+    }
+
+    public getNumExecutionPlanResultSets(
+        resultSetSummaries: any,
+        actualPlanEnabled: boolean,
+    ): number {
+        // Ported from old logic: count result sets with showplan xml column
+        let count = 0;
+        for (const batchId in resultSetSummaries) {
+            for (const resultId in resultSetSummaries[batchId]) {
+                const resultSet = resultSetSummaries[batchId][resultId];
+                if (
+                    resultSet &&
+                    resultSet.columnInfo &&
+                    resultSet.columnInfo[0]?.columnName === "Microsoft SQL Server 2005 XML Showplan"
+                ) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    public getExecutionPlanService(): ExecutionPlanService {
+        return this.executionPlanService;
+    }
+
+    public getUntitledDocumentService(): UntitledSqlDocumentService {
+        return this.untitledSqlDocumentService;
+    }
+
+    public async copyAllMessagesToClipboard(uri: string): Promise<void> {
+        const state = this._queryResultStateMap.get(uri);
+        if (state && state.messages && state.messages.length > 0) {
+            const text = state.messages.map((m) => m.message).join("\n");
+            await vscode.env.clipboard.writeText(text);
+        }
+    }
 
     constructor(
         context: vscode.ExtensionContext,
@@ -70,10 +140,9 @@ export class QueryResultWebviewController extends ReactWebviewViewController<
                         messages: [],
                         tabStates: undefined,
                         isExecutionPlan: false,
-                        executionPlanState: {},
+                        executionPlanState: { loadState: ApiStatus.NotStarted },
                         fontSettings: {
                             fontSize: this.getFontSizeConfig(),
-
                             fontFamily: this.getFontFamilyConfig(),
                         },
                         autoSizeColumns: this.getAutoSizeColumnsConfig(),
@@ -256,14 +325,14 @@ export class QueryResultWebviewController extends ReactWebviewViewController<
             title: title,
             isExecutionPlan: isExecutionPlan,
             actualPlanEnabled: actualPlanEnabled,
-            ...(isExecutionPlan && {
-                executionPlanState: {
-                    loadState: ApiStatus.Loading,
-                    executionPlanGraphs: [],
-                    totalCost: 0,
-                    xmlPlans: {},
-                },
-            }),
+            executionPlanState: isExecutionPlan
+                ? {
+                      loadState: ApiStatus.Loading,
+                      executionPlanGraphs: [],
+                      totalCost: 0,
+                      xmlPlans: {},
+                  }
+                : { loadState: ApiStatus.NotStarted },
             fontSettings: {
                 fontSize: this.getFontSizeConfig(),
                 fontFamily: this.getFontFamilyConfig(),
@@ -302,6 +371,11 @@ export class QueryResultWebviewController extends ReactWebviewViewController<
     }
 
     public setQueryResultState(uri: string, state: qr.QueryResultWebviewState) {
+        console.log(`[QueryResultWebviewController] setQueryResultState called for URI: ${uri}`);
+        console.log(
+            `[QueryResultWebviewController] setQueryResultState state:`,
+            JSON.stringify(state, null, 2),
+        );
         this._queryResultStateMap.set(uri, state);
     }
 
@@ -310,143 +384,54 @@ export class QueryResultWebviewController extends ReactWebviewViewController<
     }
 
     public updatePanelState(uri: string): void {
-        if (this._queryResultWebviewPanelControllerMap.has(uri)) {
-            this._queryResultWebviewPanelControllerMap
-                .get(uri)
-                .updateState(this.getQueryResultState(uri));
-            this._queryResultWebviewPanelControllerMap.get(uri).revealToForeground();
+        console.log(`[QueryResultWebviewController] updatePanelState called for URI: ${uri}`);
+        const state = this.getQueryResultState(uri);
+        console.log(
+            `[QueryResultWebviewController] updatePanelState state:`,
+            JSON.stringify(state, null, 2),
+        );
+        if (!this._queryResultWebviewPanelControllerMap.has(uri)) {
+            // Panel is missing, recreate it
+            void this.createPanelController(uri).then(() => {
+                // After creation, update the panel state with the latest results
+                const panel = this._queryResultWebviewPanelControllerMap.get(uri);
+                if (panel) {
+                    console.log(
+                        `[QueryResultWebviewController] Panel created for URI: ${uri}, updating state.`,
+                    );
+                    panel.updateState(this.getQueryResultState(uri));
+                    panel.revealToForeground();
+                }
+            });
+            return;
         }
-    }
-
-    public removePanel(uri: string): void {
-        if (this._queryResultWebviewPanelControllerMap.has(uri)) {
-            this._queryResultWebviewPanelControllerMap.delete(uri);
+        const panel = this._queryResultWebviewPanelControllerMap.get(uri);
+        if (panel) {
+            console.log(
+                `[QueryResultWebviewController] Panel exists for URI: ${uri}, updating state.`,
+            );
+            panel.updateState(this.getQueryResultState(uri));
+            panel.revealToForeground();
         }
-    }
-
-    public hasPanel(uri: string): boolean {
-        return this._queryResultWebviewPanelControllerMap.has(uri);
     }
 
     public getQueryResultState(uri: string): qr.QueryResultWebviewState {
         var res = this._queryResultStateMap.get(uri);
         if (!res) {
             // This should never happen
-
             const error = new Error(`No query result state found for uri ${uri}`);
-
             sendErrorEvent(
                 TelemetryViews.QueryResult,
                 TelemetryActions.GetQueryResultState,
                 error,
                 false, // includeErrorMessage
             );
-
             throw error;
         }
+        console.log(
+            `[QueryResultWebviewController] getQueryResultState for URI: ${uri}`,
+            JSON.stringify(res, null, 2),
+        );
         return res;
-    }
-
-    public addResultSetSummary(uri: string, resultSetSummary: qr.ResultSetSummary) {
-        let state = this.getQueryResultState(uri);
-        const batchId = resultSetSummary.batchId;
-        const resultId = resultSetSummary.id;
-        if (!state.resultSetSummaries[batchId]) {
-            state.resultSetSummaries[batchId] = {};
-        }
-        state.resultSetSummaries[batchId][resultId] = resultSetSummary;
-    }
-
-    public setSqlOutputContentProvider(provider: SqlOutputContentProvider): void {
-        this._sqlOutputContentProvider = provider;
-    }
-
-    public getSqlOutputContentProvider(): SqlOutputContentProvider {
-        return this._sqlOutputContentProvider;
-    }
-
-    public setExecutionPlanService(service: ExecutionPlanService): void {
-        this.executionPlanService = service;
-    }
-
-    public getExecutionPlanService(): ExecutionPlanService {
-        return this.executionPlanService;
-    }
-
-    public setUntitledDocumentService(service: UntitledSqlDocumentService): void {
-        this.untitledSqlDocumentService = service;
-    }
-
-    public getUntitledDocumentService(): UntitledSqlDocumentService {
-        return this.untitledSqlDocumentService;
-    }
-
-    public async copyAllMessagesToClipboard(uri: string): Promise<void> {
-        const messages = uri
-            ? this.getQueryResultState(uri)?.messages?.map((message) => messageToString(message))
-            : this.state?.messages?.map((message) => messageToString(message));
-
-        if (!messages) {
-            return;
-        }
-
-        const messageText = messages.join("\n");
-        await this.vscodeWrapper.clipboardWriteText(messageText);
-    }
-
-    public getNumExecutionPlanResultSets(
-        resultSetSummaries: qr.QueryResultWebviewState["resultSetSummaries"],
-        actualPlanEnabled: boolean,
-    ): number {
-        const summariesLength = recordLength(resultSetSummaries);
-        if (!actualPlanEnabled) {
-            return summariesLength;
-        }
-        // count the amount of xml showplans in the result summaries
-        let total = 0;
-        Object.values(resultSetSummaries).forEach((batch) => {
-            Object.values(batch).forEach((result) => {
-                // Check if any column in columnInfo has the specific column name
-                if (result.columnInfo[0].columnName === Constants.showPlanXmlColumnName) {
-                    total++;
-                }
-            });
-        });
-        return total;
-    }
-
-    public updateSelectionSummaryStatusItem(selectionSummary: qr.SelectionSummaryStats) {
-        if (selectionSummary.removeSelectionStats) {
-            this._selectionSummaryStatusBarItem.text = "";
-            this._selectionSummaryStatusBarItem.hide();
-        } else {
-            // the selection is numeric
-            if (selectionSummary.average) {
-                this._selectionSummaryStatusBarItem.text = QueryResult.numericSelectionSummary(
-                    selectionSummary.average,
-                    selectionSummary.count,
-                    selectionSummary.sum,
-                );
-                this._selectionSummaryStatusBarItem.tooltip =
-                    QueryResult.numericSelectionSummaryTooltip(
-                        selectionSummary.average,
-                        selectionSummary.count,
-                        selectionSummary.distinctCount,
-                        selectionSummary.max,
-                        selectionSummary.min,
-                        selectionSummary.nullCount,
-                        selectionSummary.sum,
-                    );
-            } else {
-                this._selectionSummaryStatusBarItem.text = QueryResult.nonNumericSelectionSummary(
-                    selectionSummary.count,
-                    selectionSummary.distinctCount,
-                    selectionSummary.nullCount,
-                );
-                this._selectionSummaryStatusBarItem.tooltip =
-                    this._selectionSummaryStatusBarItem.text;
-            }
-            this._selectionSummaryStatusBarItem.show();
-        }
     }
 }
