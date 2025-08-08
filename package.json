@@ -217,6 +217,13 @@
                     "name": "%extension.queryHistory%",
                     "when": "config.mssql.enableQueryHistoryFeature"
                 }
+            ],
+            "explorer": [
+                {
+                    "id": "queryRunnerExplorer",
+                    "name": "Query Runner Explorer",
+                    "icon": "media/database_light.svg"
+                }
             ]
         },
         "chatParticipants": [
