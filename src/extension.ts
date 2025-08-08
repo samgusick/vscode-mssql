@@ -5,6 +5,7 @@
 
 import * as vscode from "vscode";
 import * as vscodeMssql from "vscode-mssql";
+import { registerQueryRunnerExplorer } from "./views/queryRunnerExplorer/registerQueryRunnerExplorer";
 import MainController from "./controllers/mainController";
 import VscodeWrapper from "./controllers/vscodeWrapper";
 import { ConnectionDetails, IConnectionInfo, IExtension } from "vscode-mssql";
@@ -30,6 +31,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<IExten
     context.subscriptions.push(controller);
 
     IconUtils.initialize(context.extensionUri);
+
+    // Register Query Runner Explorer view
+    registerQueryRunnerExplorer(context);
+
+    // Checking if localization should be applied
+    //let config = vscodeWrapper.getConfiguration(Constants.extensionConfigSectionName);
+    //let applyLocalization = config[Constants.configApplyLocalization];
+    // if (applyLocalization) {
+    // 	LocalizedConstants.loadLocalizedConstants(vscode.env.language);
+    // }
 
     // Check if GitHub Copilot is installed
     const copilotExtension = vscode.extensions.getExtension("GitHub.copilot");

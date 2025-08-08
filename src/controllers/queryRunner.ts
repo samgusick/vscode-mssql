@@ -7,6 +7,12 @@ import { EventEmitter } from "events";
 
 import * as vscode from "vscode";
 import StatusView from "../views/statusView";
+import { QueryRunnerManager } from "./queryRunnerManager";
+import {
+    QueryRunnerInfo,
+    QueryRunnerStep,
+    QueryRunnerStepStatus,
+} from "../views/queryRunnerExplorer/queryRunnerTreeDataProvider";
 import SqlToolsServerClient from "../languageservice/serviceclient";
 import { QueryNotificationHandler } from "./queryNotificationHandler";
 import VscodeWrapper from "./vscodeWrapper";
@@ -58,6 +64,7 @@ export interface IResultSet {
  */
 export default class QueryRunner {
     // MEMBER VARIABLES ////////////////////////////////////////////////////
+    private _steps: QueryRunnerStep[] = [];
     private _batchSets: BatchSummary[] = [];
     private _batchSetMessages: { [batchId: number]: IResultMessage[] } = {};
     private _isExecuting: boolean;
@@ -96,6 +103,10 @@ export default class QueryRunner {
         this._isExecuting = false;
         this._totalElapsedMilliseconds = 0;
         this._hasCompleted = false;
+
+        // Register this query runner in the manager on creation
+        this._logStep("Created", "Success", "QueryRunner created");
+        QueryRunnerManager.getInstance().updateQueryRunner(this._toQueryRunnerInfo("Created"));
     }
 
     // PROPERTIES //////////////////////////////////////////////////////////
@@ -255,6 +266,7 @@ export default class QueryRunner {
         this._statusView.executingQuery(this.uri);
 
         let onSuccess = (_result: unknown) => {
+            this._logStep("Started", "Success", "Query execution started");
             // The query has started, so lets fire up the result pane
             QueryRunner._runningQueries.push(vscode.Uri.parse(this._ownerUri).fsPath);
             vscode.commands.executeCommand(
@@ -264,8 +276,11 @@ export default class QueryRunner {
             );
             this.eventEmitter.emit("start", this.uri);
             this._notificationHandler.registerRunner(this, this._ownerUri);
+            // Update manager: running
+            QueryRunnerManager.getInstance().updateQueryRunner(this._toQueryRunnerInfo("Running"));
         };
         let onError = (error: unknown) => {
+            this._logStep("Error", "Error", error instanceof Error ? error.message : String(error));
             // Only update internal state and emit events, do not call executedQuery here
             this._isExecuting = false;
             this._hasCompleted = true;
@@ -284,11 +299,16 @@ export default class QueryRunner {
             // TODO: localize
             let errorMsg = error instanceof Error ? error.message : String(error);
             this._vscodeWrapper.showErrorMessage("Execution failed: " + errorMsg);
+            // Update manager: error
+            QueryRunnerManager.getInstance().updateQueryRunner(
+                this._toQueryRunnerInfo("Error", errorMsg),
+            );
             // Ensure the returned promise is rejected so the test can catch it
             throw error;
         };
 
         try {
+            this._logStep("SentToServer", "Success", "Query sent to server");
             await queryCallback(onSuccess, onError);
         } catch (error) {
             // If queryCallback throws synchronously, handle it here
@@ -296,7 +316,12 @@ export default class QueryRunner {
             // Show error message here to ensure test expectation is met
             let errorMsg = error instanceof Error ? error.message : String(error);
             this._vscodeWrapper.showErrorMessage("Execution failed: " + errorMsg);
+            this._logStep("Error", "Error", errorMsg);
             onError(error);
+            // Update manager: error
+            QueryRunnerManager.getInstance().updateQueryRunner(
+                this._toQueryRunnerInfo("Error", errorMsg),
+            );
             throw error;
         }
     }
@@ -350,6 +375,15 @@ export default class QueryRunner {
             "complete",
             Utils.parseNumAsTimeString(this._totalElapsedMilliseconds),
             hasError,
+        );
+        // Update QueryRunnerManager with Success or Error
+        this._logStep(
+            hasError ? "Error" : "Completed",
+            hasError ? "Error" : "Success",
+            hasError ? "Query completed with errors" : "Query completed successfully",
+        );
+        QueryRunnerManager.getInstance().updateQueryRunner(
+            this._toQueryRunnerInfo(hasError ? "Error" : "Success", undefined),
         );
         sendActionEvent(
             TelemetryViews.QueryEditor,
@@ -505,18 +539,54 @@ export default class QueryRunner {
      * @returns A promise that will be rejected if a problem occured
      */
     public async dispose(): Promise<void> {
+        this._logStep("Disposed", "Success", "QueryRunner disposed");
         let disposeDetails = new QueryDisposeParams();
         disposeDetails.ownerUri = this.uri;
         try {
             await this._client.sendRequest(QueryDisposeRequest.type, disposeDetails);
         } catch (error) {
+            this._logStep(
+                "DisposeError",
+                "Error",
+                error instanceof Error ? error.message : String(error),
+            );
             this._handleCancelDisposeCleanup(
                 LocalizedConstants.QueryEditor.queryDisposeFailed(error),
                 error,
             );
+            // Update manager: error
+            QueryRunnerManager.getInstance().updateQueryRunner(
+                this._toQueryRunnerInfo(
+                    "Error",
+                    error instanceof Error ? error.message : String(error),
+                ),
+            );
             return;
         }
         this._handleCancelDisposeCleanup();
+        // Remove from manager on dispose
+        QueryRunnerManager.getInstance().removeQueryRunner(this._ownerUri);
+    }
+    private _toQueryRunnerInfo(status: string, error?: string): QueryRunnerInfo {
+        return {
+            id: this._ownerUri,
+            status,
+            query: this._uriToQueryStringMap.get(this._ownerUri) || "",
+            duration: this._totalElapsedMilliseconds,
+            error,
+            steps: this._steps,
+        };
+    }
+
+    private _logStep(name: string, status: QueryRunnerStepStatus, message?: string) {
+        const step: QueryRunnerStep = {
+            name,
+            status,
+            timestamp: new Date().toISOString(),
+            message,
+        };
+        this._steps.push(step);
+        QueryRunnerManager.getInstance().appendStep(this._ownerUri, step);
     }
 
     /**
