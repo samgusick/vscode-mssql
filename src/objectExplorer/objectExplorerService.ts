@@ -89,9 +89,10 @@ export class ObjectExplorerService {
 
         const rootId = this._connectionManager.connectionStore.rootGroupId;
 
+        // If legacy persisted ROOT group exists, ignore it; always use hard-coded rootId
         if (!this._connectionGroupNodes.has(rootId)) {
             this._logger.error(
-                "Root server group is not defined. Cannot get root nodes for Object Explorer.",
+                "Hard-coded Root server group is not defined. Cannot get root nodes for Object Explorer.",
             );
             return [];
         }

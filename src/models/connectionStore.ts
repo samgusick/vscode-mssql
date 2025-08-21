@@ -727,9 +727,10 @@ export class ConnectionStore {
         return connResults;
     }
 
-    /** Gets the groupId for connections  */
+    /** Gets the groupId for connections (always hard-coded, never from settings) */
     public get rootGroupId(): string {
-        return this.connectionConfig.getRootGroup().id;
+        // Always return the hard-coded ROOT group ID
+        return ConnectionConfig.RootGroupId;
     }
 
     public async getConnectionQuickpickItems(

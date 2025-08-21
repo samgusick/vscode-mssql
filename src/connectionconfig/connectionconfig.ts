@@ -23,8 +23,9 @@ export class ConnectionConfig implements IConnectionConfig {
     protected _logger: Logger;
     public initialized: Deferred<void> = new Deferred<void>();
 
-    /** The name of the root connection group. */
-    static readonly RootGroupName: string = "ROOT";
+    /** The name and ID of the root connection group. */
+    static readonly RootGroupId: string = Constants.ROOT_GROUP_ID;
+    static readonly RootGroupName: string = Constants.ROOT_GROUP_NAME;
     private _hasDisplayedMissingIdError: boolean = false;
 
     /**
@@ -179,29 +180,26 @@ export class ConnectionConfig implements IConnectionConfig {
 
     //#region Connection Groups
 
-    public getRootGroup(): IConnectionGroup | undefined {
-        let groups: IConnectionGroup[] = this.getGroupsFromSettings();
-        groups = groups.filter((group) => group.name === ConnectionConfig.RootGroupName);
-
-        if (groups.length === 0) {
-            this._logger.error(
-                `No root connection group found. This should have been fixed at initialization.`,
-            );
-            return undefined;
-        } else if (groups.length > 1) {
-            const message = `Multiple connection groups with name "${ConnectionConfig.RootGroupName}" found.  Returning the first one: ${groups[0].id}. Delete or rename the others, then restart the extension.`;
-            this._logger.error(message);
-            this._vscodeWrapper.showErrorMessage(message);
-        }
-
-        return groups[0];
+    /**
+     * Returns the hard-coded ROOT connection group.
+     */
+    public getRootGroup(): IConnectionGroup {
+        return {
+            id: ConnectionConfig.RootGroupId,
+            name: ConnectionConfig.RootGroupName,
+            parentId: undefined,
+        };
     }
 
     public async getGroups(
         location: ConfigTarget = ConfigurationTarget.Global,
     ): Promise<IConnectionGroup[]> {
         await this.initialized;
-        return this.getGroupsFromSettings(location);
+        // Always include the hard-coded ROOT group at the top
+        const groups = this.getGroupsFromSettings(location).filter(
+            (g) => g.id !== ConnectionConfig.RootGroupId,
+        );
+        return [this.getRootGroup(), ...groups];
     }
 
     /**
@@ -210,20 +208,27 @@ export class ConnectionConfig implements IConnectionConfig {
      * @returns The connection group with the specified ID, or `undefined` if not found.
      */
     public getGroupById(id: string): IConnectionGroup | undefined {
+        if (id === ConnectionConfig.RootGroupId) {
+            return this.getRootGroup();
+        }
         const connGroups = this.getGroupsFromSettings(ConfigurationTarget.Global);
         return connGroups.find((g) => g.id === id);
     }
 
     public addGroup(group: IConnectionGroup): Promise<void> {
+        // Prevent adding the ROOT group to settings
+        if (group.id === ConnectionConfig.RootGroupId) {
+            return Promise.resolve();
+        }
         if (!group.id) {
             group.id = Utils.generateGuid();
         }
-
         if (!group.parentId) {
-            group.parentId = this.getRootGroup().id;
+            group.parentId = ConnectionConfig.RootGroupId;
         }
-
-        const groups = this.getGroupsFromSettings();
+        const groups = this.getGroupsFromSettings().filter(
+            (g) => g.id !== ConnectionConfig.RootGroupId,
+        );
         groups.push(group);
         return this.writeConnectionGroupsToSettings(groups);
     }
@@ -264,10 +269,14 @@ export class ConnectionConfig implements IConnectionConfig {
         let remainingConnections: IConnectionProfile[];
         let remainingGroups: IConnectionGroup[];
 
+        if (id === ConnectionConfig.RootGroupId) {
+            // Never remove the ROOT group
+            this._logger.error("Attempted to remove ROOT group, which is not allowed.");
+            return false;
+        }
         if (contentAction === "delete") {
             // Get all nested subgroups to remove
             const groupsToRemove = getAllSubgroupIds(id);
-
             // Remove all connections in the groups being removed
             remainingConnections = connections.filter((conn) => {
                 if (groupsToRemove.has(conn.groupId)) {
@@ -279,9 +288,10 @@ export class ConnectionConfig implements IConnectionConfig {
                 }
                 return true;
             });
-
-            // Remove all groups that were marked for removal
-            remainingGroups = groups.filter((g) => !groupsToRemove.has(g.id));
+            // Remove all groups that were marked for removal, but never remove ROOT
+            remainingGroups = groups.filter(
+                (g) => !groupsToRemove.has(g.id) && g.id !== ConnectionConfig.RootGroupId,
+            );
         } else {
             // Move immediate child connections to root
             remainingConnections = connections.map((conn) => {
@@ -294,10 +304,10 @@ export class ConnectionConfig implements IConnectionConfig {
                 }
                 return conn;
             });
-
-            // First remove the target group
-            remainingGroups = groups.filter((g) => g.id !== id);
-
+            // First remove the target group, but never remove ROOT
+            remainingGroups = groups.filter(
+                (g) => g.id !== id && g.id !== ConnectionConfig.RootGroupId,
+            );
             // Then reparent immediate children to root
             remainingGroups = remainingGroups.map((g) => {
                 if (g.parentId === id) {
@@ -324,14 +334,19 @@ export class ConnectionConfig implements IConnectionConfig {
     }
 
     public async updateGroup(updatedGroup: IConnectionGroup): Promise<void> {
-        const groups = this.getGroupsFromSettings();
+        // Prevent updating the ROOT group in settings
+        if (updatedGroup.id === ConnectionConfig.RootGroupId) {
+            return;
+        }
+        const groups = this.getGroupsFromSettings().filter(
+            (g) => g.id !== ConnectionConfig.RootGroupId,
+        );
         const index = groups.findIndex((g) => g.id === updatedGroup.id);
         if (index === -1) {
             throw Error(`Connection group with ID ${updatedGroup.id} not found when updating`);
         } else {
             groups[index] = updatedGroup;
         }
-
         return await this.writeConnectionGroupsToSettings(groups);
     }
 
@@ -375,22 +390,16 @@ export class ConnectionConfig implements IConnectionConfig {
      */
     public populateMissingConnectionIds(profile: IConnectionProfile): boolean {
         let modified = false;
-
         // ensure each profile is in a group
         if (profile.groupId === undefined) {
-            const rootGroup = this.getRootGroup();
-            if (rootGroup) {
-                profile.groupId = rootGroup.id;
-                modified = true;
-            }
+            profile.groupId = ConnectionConfig.RootGroupId;
+            modified = true;
         }
-
         // ensure each profile has an ID
         if (profile.id === undefined) {
             ConnectionProfile.addIdIfMissing(profile);
             modified = true;
         }
-
         return modified;
     }
 
@@ -400,49 +409,50 @@ export class ConnectionConfig implements IConnectionConfig {
 
     private async assignConnectionGroupMissingIds(): Promise<void> {
         let madeChanges = false;
-        const groups: IConnectionGroup[] = this.getGroupsFromSettings();
-
-        // ensure ROOT group exists
-        let rootGroup = await this.getRootGroup();
-
-        if (!rootGroup) {
-            rootGroup = {
-                name: ConnectionConfig.RootGroupName,
-                id: Utils.generateGuid(),
-            };
-
-            this._logger.logDebug(`Adding missing ROOT group to connection groups`);
-            madeChanges = true;
-            groups.push(rootGroup);
-        }
-
-        // Clean up connection groups
+        let groups: IConnectionGroup[] = this.getGroupsFromSettings().filter(
+            (g) => g.id !== ConnectionConfig.RootGroupId,
+        );
+        // Find legacy ROOT group IDs in settings (any group with name 'ROOT' but not the hard-coded ID)
+        const legacyRootGroups = this.getGroupsFromSettings().filter(
+            (g) =>
+                g.name === ConnectionConfig.RootGroupName && g.id !== ConnectionConfig.RootGroupId,
+        );
+        const legacyRootIds = legacyRootGroups.map((g) => g.id);
+        // Gather all valid group IDs (including hard-coded ROOT)
+        const validGroupIds = new Set([ConnectionConfig.RootGroupId, ...groups.map((g) => g.id)]);
         for (const group of groups) {
-            if (group.id === rootGroup.id) {
-                continue;
+            // Migrate legacy groups whose parentId is a legacy ROOT group ID
+            if (legacyRootIds.includes(group.parentId)) {
+                group.parentId = ConnectionConfig.RootGroupId;
+                madeChanges = true;
+                this._logger.logDebug(
+                    `Migrated group '${group.name}' from legacy ROOT parent to new hard-coded ROOT group.`,
+                );
             }
-
+            // Re-parent orphaned groups to ROOT
+            if (group.parentId && !validGroupIds.has(group.parentId)) {
+                group.parentId = ConnectionConfig.RootGroupId;
+                madeChanges = true;
+                this._logger.logDebug(`Re-parented orphaned group '${group.name}' to ROOT.`);
+            }
             // ensure each group has an ID
             if (!group.id) {
                 group.id = Utils.generateGuid();
                 madeChanges = true;
                 this._logger.logDebug(`Adding missing ID to connection group '${group.name}'`);
             }
-
             // ensure each group is in a group
             if (!group.parentId) {
-                group.parentId = rootGroup.id;
+                group.parentId = ConnectionConfig.RootGroupId;
                 madeChanges = true;
                 this._logger.logDebug(`Adding missing parentId to connection '${group.name}'`);
             }
         }
-
         // Save the changes to settings
         if (madeChanges) {
             this._logger.logDebug(
                 `Updates made to connection groups.  Writing all ${groups.length} group(s) to settings.`,
             );
-
             await this.writeConnectionGroupsToSettings(groups);
         }
     }
@@ -453,7 +463,35 @@ export class ConnectionConfig implements IConnectionConfig {
         // Clean up connection profiles
         const profiles: IConnectionProfile[] = this.getConnectionsFromSettings();
 
+        // Find legacy ROOT group IDs in settings (any group with name 'ROOT' but not the hard-coded ID)
+        const legacyRootGroups = this.getGroupsFromSettings().filter(
+            (g) =>
+                g.name === ConnectionConfig.RootGroupName && g.id !== ConnectionConfig.RootGroupId,
+        );
+        const legacyRootIds = legacyRootGroups.map((g) => g.id);
+        // Gather all valid group IDs (including hard-coded ROOT)
+        const validGroupIds = new Set([
+            ConnectionConfig.RootGroupId,
+            ...profiles.map((p) => p.groupId),
+        ]);
+
         for (const profile of profiles) {
+            // Migrate legacy connections with old ROOT group IDs
+            if (legacyRootIds.includes(profile.groupId)) {
+                profile.groupId = ConnectionConfig.RootGroupId;
+                madeChanges = true;
+                this._logger.logDebug(
+                    `Migrated connection '${getConnectionDisplayName(profile)}' from legacy ROOT group to new hard-coded ROOT group.`,
+                );
+            }
+            // Re-parent orphaned connections to ROOT
+            if (profile.groupId && !validGroupIds.has(profile.groupId)) {
+                profile.groupId = ConnectionConfig.RootGroupId;
+                madeChanges = true;
+                this._logger.logDebug(
+                    `Re-parented orphaned connection '${getConnectionDisplayName(profile)}' to ROOT.`,
+                );
+            }
             if (this.populateMissingConnectionIds(profile)) {
                 madeChanges = true;
                 this._logger.logDebug(
@@ -467,7 +505,6 @@ export class ConnectionConfig implements IConnectionConfig {
             this._logger.logDebug(
                 `Updates made to connection profiles.  Writing all ${profiles.length} profile(s) to settings.`,
             );
-
             await this.writeConnectionsToSettings(profiles);
         }
     }

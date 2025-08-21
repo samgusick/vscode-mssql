@@ -90,6 +90,7 @@ export class ObjectExplorerDragAndDropController
 
                     // If the target is undefined, we're dropping onto the root of the Object Explorer
                     if (target === undefined) {
+                        // Always use hard-coded ROOT node, never legacy persisted
                         targetInfo = {
                             label: "ROOT",
                             id: this.connectionStore.rootGroupId,

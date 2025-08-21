@@ -665,6 +665,7 @@ export class ConnectionUI {
         const rootId = this._connectionManager.connectionStore.rootGroupId;
         let connectionGroups =
             await this._connectionManager.connectionStore.readAllConnectionGroups();
+        // Filter out any legacy persisted ROOT group
         connectionGroups = connectionGroups.filter((g) => g.id !== rootId);
 
         // Count occurrences of group names to handle naming conflicts
