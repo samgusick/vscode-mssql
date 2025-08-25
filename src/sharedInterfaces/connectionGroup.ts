@@ -51,6 +51,7 @@ export interface ConnectionGroupReducers {
         name: string;
         description?: string;
         color?: string;
+        scope?: "user" | "workspace";
     };
 
     closeDialog: {};
@@ -68,4 +69,5 @@ export interface ConnectionGroupSpec {
     name: string;
     description?: string;
     color?: string;
+    scope?: "user" | "workspace";
 }

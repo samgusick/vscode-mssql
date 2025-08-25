@@ -151,6 +151,7 @@ export interface ConnectionDialogContextProps
     loadConnection: (connection: IConnectionDialogProfile) => void;
     setConnectionInputType: (inputType: ConnectionInputMode) => void;
     connect: () => void;
+    connectWithScope?: (scope: "user" | "workspace") => void;
     loadAzureServers: (subscriptionId: string) => void;
     closeDialog: () => void;
     closeMessage: () => void;

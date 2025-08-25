@@ -140,16 +140,27 @@ export class ConnectionConfig implements IConnectionConfig {
         return profiles.find((profile) => profile.id === id);
     }
 
-    public async addConnection(profile: IConnectionProfile): Promise<void> {
+    /**
+     * Add a connection profile to user or workspace settings.
+     * @param profile The connection profile to add.
+     * @param scope 'user' for global, 'workspace' for workspace settings.
+     */
+    public async addConnection(
+        profile: IConnectionProfile,
+        scope: "user" | "workspace" = "user",
+    ): Promise<void> {
         this.populateMissingConnectionIds(profile);
-
-        let profiles = await this.getConnections(false /* getWorkspaceConnections */);
-
-        // Remove the profile if already set
+        const configTarget =
+            scope === "user" ? ConfigurationTarget.Global : ConfigurationTarget.Workspace;
+        // Read current profiles from the correct scope
+        let profiles = this.getConnectionsFromSettings(configTarget);
+        // Remove any existing profile that matches
         profiles = profiles.filter((value) => !Utils.isSameProfile(value, profile));
+        // Append the new profile
         profiles.push(profile);
-
-        return await this.writeConnectionsToSettings(profiles);
+        // Write the updated array back to the correct scope
+        await this.writeConnectionsToSettings(profiles, configTarget);
+        return;
     }
 
     /**
@@ -215,7 +226,7 @@ export class ConnectionConfig implements IConnectionConfig {
         return connGroups.find((g) => g.id === id);
     }
 
-    public addGroup(group: IConnectionGroup): Promise<void> {
+    public addGroup(group: IConnectionGroup, scope: "user" | "workspace" = "user"): Promise<void> {
         // Prevent adding the ROOT group to settings
         if (group.id === ConnectionConfig.RootGroupId) {
             return Promise.resolve();
@@ -226,11 +237,13 @@ export class ConnectionConfig implements IConnectionConfig {
         if (!group.parentId) {
             group.parentId = ConnectionConfig.RootGroupId;
         }
-        const groups = this.getGroupsFromSettings().filter(
+        const configTarget =
+            scope === "user" ? ConfigurationTarget.Global : ConfigurationTarget.Workspace;
+        const groups = this.getGroupsFromSettings(configTarget).filter(
             (g) => g.id !== ConnectionConfig.RootGroupId,
         );
         groups.push(group);
-        return this.writeConnectionGroupsToSettings(groups);
+        return this.writeConnectionGroupsToSettings(groups, configTarget);
     }
 
     /**
@@ -419,7 +432,13 @@ export class ConnectionConfig implements IConnectionConfig {
         );
         const legacyRootIds = legacyRootGroups.map((g) => g.id);
         // Gather all valid group IDs (including hard-coded ROOT)
-        const validGroupIds = new Set([ConnectionConfig.RootGroupId, ...groups.map((g) => g.id)]);
+        const allGroups = this.getGroupsFromSettings().filter(
+            (g) => g.id !== ConnectionConfig.RootGroupId,
+        );
+        const validGroupIds = new Set([
+            ConnectionConfig.RootGroupId,
+            ...allGroups.map((g) => g.id),
+        ]);
         for (const group of groups) {
             // Migrate legacy groups whose parentId is a legacy ROOT group ID
             if (legacyRootIds.includes(group.parentId)) {
@@ -541,20 +560,28 @@ export class ConnectionConfig implements IConnectionConfig {
      * Replace existing profiles in the user settings with a new set of profiles.
      * @param profiles the set of profiles to insert into the settings file.
      */
-    private async writeConnectionsToSettings(profiles: IConnectionProfile[]): Promise<void> {
+    private async writeConnectionsToSettings(
+        profiles: IConnectionProfile[],
+        configTarget: ConfigurationTarget = ConfigurationTarget.Global,
+    ): Promise<void> {
         // Save the file
         await this._vscodeWrapper.setConfiguration(
             Constants.extensionName,
             Constants.connectionsArrayName,
             profiles,
+            configTarget,
         );
     }
 
-    private async writeConnectionGroupsToSettings(connGroups: IConnectionGroup[]): Promise<void> {
+    private async writeConnectionGroupsToSettings(
+        connGroups: IConnectionGroup[],
+        configTarget: ConfigurationTarget = ConfigurationTarget.Global,
+    ): Promise<void> {
         await this._vscodeWrapper.setConfiguration(
             Constants.extensionName,
             Constants.connectionGroupsArrayName,
             connGroups,
+            configTarget,
         );
     }
 

@@ -89,7 +89,10 @@ export class ConnectionGroupWebviewController extends ReactWebviewPanelControlle
                     });
                 } else {
                     this.logger.verbose("Creating new connection group", payload);
-                    await this.connectionConfig.addGroup(createConnectionGroupFromSpec(payload));
+                    await this.connectionConfig.addGroup(
+                        createConnectionGroupFromSpec(payload),
+                        payload.scope ?? "user",
+                    );
                 }
 
                 sendActionEvent(
@@ -155,7 +158,10 @@ export async function createConnectionGroup(
     const addedGroup = createConnectionGroupFromSpec(connectionGroupSpec);
 
     try {
-        await connectionManager.connectionStore.connectionConfig.addGroup(addedGroup);
+        await connectionManager.connectionStore.connectionConfig.addGroup(
+            addedGroup,
+            connectionGroupSpec.scope ?? "user",
+        );
         sendActionEvent(telemetryView, TelemetryActions.SaveConnectionGroup, {
             newOrEdit: "new",
         });

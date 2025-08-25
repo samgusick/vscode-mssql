@@ -55,6 +55,9 @@ const ConnectionDialogStateProvider: React.FC<ConnectionDialogProviderProps> = (
                 connect: function (): void {
                     webviewContext?.extensionRpc.action("connect");
                 },
+                connectWithScope: function (scope: "user" | "workspace"): void {
+                    webviewContext?.extensionRpc.action("connect", { scope });
+                },
                 loadAzureServers: function (subscriptionId: string): void {
                     webviewContext?.extensionRpc.action("loadAzureServers", {
                         subscriptionId: subscriptionId,

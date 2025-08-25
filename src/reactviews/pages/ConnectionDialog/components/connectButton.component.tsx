@@ -14,9 +14,11 @@ export const ConnectButtonId = "connectButton";
 export const ConnectButton = ({
     style,
     className,
+    scope,
 }: {
     style?: CSSProperties;
     className?: string;
+    scope?: "user" | "workspace";
 }) => {
     const context = useContext(ConnectionDialogContext);
 
@@ -40,7 +42,19 @@ export const ConnectButton = ({
                 context.state.connectionStatus === ApiStatus.Loading ? (
                     <Spinner size="tiny" />
                 ) : undefined
-            }>
+            }
+            onClick={() => {
+                // Call backend connect/save with scope
+                if (context && context.connectWithScope && scope) {
+                    context.connectWithScope(scope);
+                } else if (context && context.connect) {
+                    context.connect();
+                }
+                // Optionally refresh UI after save
+                if (context && context.refreshConnectionsList) {
+                    context.refreshConnectionsList();
+                }
+            }}>
             {locConstants.connectionDialog.connect}
         </Button>
     );

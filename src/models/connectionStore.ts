@@ -59,6 +59,21 @@ export class ConnectionStore {
         if (!this._connectionConfig) {
             this._connectionConfig = new ConnectionConfig(this.vscodeWrapper);
         }
+
+        // Ensure workspace settings have a connections array on startup
+        const workspaceConfig = this.vscodeWrapper.getConfiguration(Constants.extensionName);
+        const workspaceConnections = workspaceConfig.inspect<unknown[]>(
+            Constants.connectionsArrayName,
+        )?.workspaceValue;
+        // Use correct ConfigurationTarget import
+        if (!workspaceConnections) {
+            this.vscodeWrapper.setConfiguration(
+                Constants.extensionName,
+                Constants.connectionsArrayName,
+                [],
+                require("vscode").ConfigurationTarget.Workspace,
+            );
+        }
     }
 
     public get initialized(): Deferred<void> {
@@ -362,11 +377,23 @@ export class ConnectionStore {
      * @param whether the plaintext password should be written to the settings file
      * @returns a Promise that returns the original profile, for help in chaining calls
      */
+    /**
+     * Save a connection profile to user or workspace settings.
+     * @param profile The connection profile to save.
+     * @param scope 'user' for global, 'workspace' for workspace settings.
+     * @param forceWritePlaintextPassword Whether to write the password in plaintext.
+     */
     public async saveProfile(
         profile: IConnectionProfile,
+        scope: "user" | "workspace" = "user",
         forceWritePlaintextPassword?: boolean,
     ): Promise<IConnectionProfile> {
         await this._connectionConfig.populateMissingConnectionIds(profile);
+
+        // If saving to workspace and group is <Default>, set groupId to ROOT
+        if (scope === "workspace" && (!profile.groupId || profile.groupId === "<Default>")) {
+            profile.groupId = Constants.ROOT_GROUP_ID;
+        }
 
         // Add the profile to the saved list, taking care to clear out the password field if necessary
         let savedProfile: IConnectionProfile;
@@ -382,7 +409,7 @@ export class ConnectionStore {
             }
         }
 
-        await this._connectionConfig.addConnection(savedProfile);
+        await this._connectionConfig.addConnection(savedProfile, scope);
 
         if (await this.saveProfilePasswordIfNeeded(profile)) {
             ConnInfo.fixupConnectionCredentials(profile);
@@ -649,7 +676,8 @@ export class ConnectionStore {
         // if the password is saved in the credential store, remove it
         let profile = connection as IConnectionProfile;
         profile.password = "";
-        await this.saveProfile(profile);
+        // Default to user settings unless you have a way to pass scope here
+        await this.saveProfile(profile, "user");
     }
 
     public async readAllConnectionGroups(): Promise<IConnectionGroup[]> {

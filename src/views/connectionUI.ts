@@ -495,6 +495,7 @@ export class ConnectionUI {
      */
     public async createAndSaveProfile(
         validate: boolean = true,
+        scope: "user" | "workspace" = "user",
     ): Promise<IConnectionProfile | undefined> {
         if (!this._useLegacyConnectionExperience) {
             // Opening the Connection Dialog is considering the end of the flow regardless of whether they create a new connection,
@@ -507,8 +508,8 @@ export class ConnectionUI {
             let profile = await this.promptForCreateProfile();
             if (profile) {
                 let savedProfile = validate
-                    ? await this.validateAndSaveProfile(profile)
-                    : await this.saveProfile(profile);
+                    ? await this.validateAndSaveProfile(profile, scope)
+                    : await this.saveProfile(profile, scope);
                 if (savedProfile) {
                     if (validate) {
                         this.vscodeWrapper.showInformationMessage(
@@ -530,6 +531,7 @@ export class ConnectionUI {
      */
     public async validateAndSaveProfile(
         profile: IConnectionProfile,
+        scope: "user" | "workspace" = "user",
     ): Promise<IConnectionProfile | undefined> {
         let uri = this.vscodeWrapper.activeTextEditorUri;
         if (!uri || !this.vscodeWrapper.isEditingSqlFile) {
@@ -540,25 +542,28 @@ export class ConnectionUI {
 
         if (success) {
             // Success! save it
-            return await this.saveProfile(profile);
+            return await this.saveProfile(profile, scope);
         } else {
             // Check whether the error was for firewall rule or not
             if (this.connectionManager.failedUriToFirewallIpMap.has(uri)) {
                 let success = await this.addFirewallRule(uri, profile);
                 if (success) {
-                    return await this.validateAndSaveProfile(profile);
+                    return await this.validateAndSaveProfile(profile, scope);
                 }
                 return undefined;
             } else if (this.connectionManager.failedUriToSSLMap.has(uri)) {
                 // SSL error
                 let updatedConn = await this.connectionManager.handleSSLError(uri, profile);
                 if (updatedConn) {
-                    return await this.validateAndSaveProfile(updatedConn as IConnectionProfile);
+                    return await this.validateAndSaveProfile(
+                        updatedConn as IConnectionProfile,
+                        scope,
+                    );
                 }
                 return undefined;
             } else {
                 // Normal connection error! Let the user try again, prefilling values that they already entered
-                return await this.promptToRetryAndSaveProfile(profile);
+                return await this.promptToRetryAndSaveProfile(profile, scope);
             }
         }
     }
@@ -718,8 +723,14 @@ export class ConnectionUI {
     /**
      * Save a connection profile using the connection store
      */
-    public async saveProfile(profile: IConnectionProfile): Promise<IConnectionProfile> {
-        return await this._connectionStore.saveProfile(profile);
+    public async saveProfile(
+        profile: IConnectionProfile,
+        scope: "user" | "workspace" = "user",
+    ): Promise<IConnectionProfile> {
+        const result = await this._connectionStore.saveProfile(profile, scope);
+        // Force Object Explorer tree refresh after saving connection
+        await vscode.commands.executeCommand(constants.cmdAddObjectExplorer);
+        return result;
     }
 
     private async promptForCreateProfile(): Promise<IConnectionProfile> {
@@ -736,11 +747,12 @@ export class ConnectionUI {
 
     private async promptToRetryAndSaveProfile(
         profile: IConnectionProfile,
+        scope: "user" | "workspace" = "user",
         isFirewallError: boolean = false,
     ): Promise<IConnectionProfile> {
         const updatedProfile = await this.promptForRetryCreateProfile(profile, isFirewallError);
         if (updatedProfile) {
-            return await this.validateAndSaveProfile(updatedProfile);
+            return await this.validateAndSaveProfile(updatedProfile, scope);
         } else {
             return undefined;
         }

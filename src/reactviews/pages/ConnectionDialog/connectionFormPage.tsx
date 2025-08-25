@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useContext, useState } from "react";
-import { Button } from "@fluentui/react-components";
+import { Dropdown, Option, Button } from "@fluentui/react-components";
 import { ConnectionDialogContext } from "./connectionDialogStateProvider";
 import { FormField, useFormStyles } from "../../common/forms/form.component";
 import {
@@ -16,10 +16,12 @@ import {
 import { ConnectButton } from "./components/connectButton.component";
 import { locConstants } from "../../common/locConstants";
 import { AdvancedOptionsDrawer } from "./components/advancedOptionsDrawer.component";
+import { SearchableDropdown } from "../../common/searchableDropdown.component";
 
 export const ConnectionFormPage = () => {
     const context = useContext(ConnectionDialogContext);
     const [isAdvancedDrawerOpen, setIsAdvancedDrawerOpen] = useState(false);
+    const [scope, setScope] = useState<"user" | "workspace">("user");
     const formStyles = useFormStyles();
 
     if (context === undefined) {
@@ -28,6 +30,20 @@ export const ConnectionFormPage = () => {
 
     return (
         <div>
+            {/* Scope Dropdown */}
+            <div style={{ marginBottom: 16 }}>
+                <SearchableDropdown
+                    options={[
+                        { value: "user", text: "User Settings" },
+                        { value: "workspace", text: "Workspace Settings" },
+                    ]}
+                    selectedOption={{
+                        value: scope,
+                        text: scope === "user" ? "User Settings" : "Workspace Settings",
+                    }}
+                    onSelect={(option) => setScope(option.value as "user" | "workspace")}
+                />
+            </div>
             {context.state.connectionComponents.mainOptions.map((inputName, idx) => {
                 const component =
                     context.state.formComponents[inputName as keyof IConnectionDialogProfile];
@@ -63,7 +79,8 @@ export const ConnectionFormPage = () => {
                     {locConstants.connectionDialog.advancedSettings}
                 </Button>
                 <div className={formStyles.formNavTrayRight}>
-                    <ConnectButton className={formStyles.formNavTrayButton} />
+                    {/* Pass scope to ConnectButton via context or props as needed */}
+                    <ConnectButton className={formStyles.formNavTrayButton} scope={scope} />
                 </div>
             </div>
         </div>
