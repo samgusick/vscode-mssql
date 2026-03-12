@@ -884,7 +884,7 @@ export class ConnectionDialog {
     public static unsupportedAuthType(authenticationType: string) {
         return l10n.t({
             message:
-                "Unsupported authentication type in connection string: {0}. Only SQL Login, Integrated, and Azure MFA authentication are supported.",
+                "Unsupported authentication type in connection string: {0}. Only SQL Login, Integrated, Azure MFA, and Active Directory Default authentication are supported.",
             args: [authenticationType],
             comment: ["{0} is the authentication type"],
         });

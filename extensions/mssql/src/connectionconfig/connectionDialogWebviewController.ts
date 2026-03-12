@@ -522,6 +522,7 @@ export class ConnectionDialogWebviewController extends FormWebviewController<
                     AuthenticationType.SqlLogin,
                     AuthenticationType.Integrated,
                     AuthenticationType.AzureMFA,
+                    AuthenticationType.ActiveDirectoryDefault,
                 ];
 
                 if (

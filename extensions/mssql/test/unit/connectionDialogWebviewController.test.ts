@@ -732,6 +732,25 @@ suite("ConnectionDialogWebviewController Tests", () => {
                 expect(controller.state.dialog, "dialog should be closed").to.be.undefined;
             });
 
+            test("should load connection details from connection string with Active Directory Default", async () => {
+                const parsedDetails = {
+                    options: {
+                        server: "myServer",
+                        database: "myDB",
+                        authenticationType: AuthenticationType.ActiveDirectoryDefault,
+                    },
+                } as ConnectionDetails;
+
+                await runConnectionStringScenario(parsedDetails);
+
+                expect(controller.state.connectionProfile.server).to.equal("myServer");
+                expect(controller.state.connectionProfile.database).to.equal("myDB");
+                expect(controller.state.connectionProfile.authenticationType).to.equal(
+                    AuthenticationType.ActiveDirectoryDefault,
+                );
+                expect(controller.state.dialog, "dialog should be closed").to.be.undefined;
+            });
+
             test("should display error message if connection string has unsupported authentication type", async () => {
                 const parsedDetails = {
                     options: {

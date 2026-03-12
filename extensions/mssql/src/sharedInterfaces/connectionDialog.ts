@@ -207,6 +207,10 @@ export enum AuthenticationType {
      */
     AzureMFAAndUser = "AzureMFAAndUser",
     /**
+     * Microsoft Entra Id - Default (uses DefaultAzureCredential chain)
+     */
+    ActiveDirectoryDefault = "ActiveDirectoryDefault",
+    /**
      * Datacenter Security Token Service Authentication
      */
     DSTSAuth = "dstsAuth",
